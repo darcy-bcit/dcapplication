@@ -8,7 +8,7 @@
 
 struct dc_config
 {
-    int ignore; // can't have an empty struct
+    bool verbose;
 };
 
 

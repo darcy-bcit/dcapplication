@@ -3,47 +3,188 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wordexp.h>
+#include <dc_fsm/fsm.h>
+
+
+struct application_environment
+{
+    struct dc_fsm_environment common;
+    struct dc_application *app;
+    int argc;
+    const char **argv;
+    const char **env_vars;
+    const char *config_file_path;
+    void *app_data;
+    struct dc_config *config;
+    int result;
+};
+
+
+static int create_config(struct application_environment *env);
+static int setup_config(struct application_environment *env);
+static int run(struct application_environment *env);
+static int cleanup(struct application_environment *env);
+static int error(struct application_environment *env);
+static int destroy_config(struct application_environment *env);
+
+
+typedef enum
+{
+    CREATE_CONFIG = FSM_APP_STATE_START, // 2
+    SETUP_CONFIG,                        // 3
+    RUN,                                 // 4
+    CLEANUP,                             // 5
+    DESTROY_CONFIG,                      // 6
+    ERROR,                               // 7
+} States;
 
 
 int dc_application_run(struct dc_application *app,
                        int                    argc,
                        const char            *argv[],
-                       const char            *env[],
+                       const char            *env_vars[],
                        const char            *config_file_path,
                        void                  *app_data)
 {
-    struct dc_config *config;
-    int               retVal;
+    struct application_environment *env;
+    int                             result;
+    int                             start_state;
+    int                             end_state;
+    static struct state_transition  transitions[] =
+            {
+                    { FSM_INIT,       CREATE_CONFIG,  (state_func)create_config  },
+                    { CREATE_CONFIG,  SETUP_CONFIG,   (state_func)setup_config   },
+                    { CREATE_CONFIG,  RUN,            (state_func)run            },
+                    { SETUP_CONFIG,   RUN,            (state_func)run            },
+                    { RUN,            CLEANUP,        (state_func)cleanup        },
+                    { RUN,            DESTROY_CONFIG, (state_func)destroy_config },
+                    { RUN,            FSM_EXIT,       NULL                       },
+                    { CLEANUP,        DESTROY_CONFIG, (state_func)destroy_config },
+                    { CLEANUP,        FSM_EXIT,       NULL                       },
+                    { DESTROY_CONFIG, FSM_EXIT,       NULL                       },
+                    { CREATE_CONFIG,  ERROR,          (state_func)error          },
+                    { SETUP_CONFIG,   ERROR,          (state_func)error          },
+                    { RUN,            ERROR,          (state_func)error          },
+                    { CLEANUP,        ERROR,          (state_func)error          },
+                    { ERROR,          FSM_EXIT,       NULL                       },
+                    { FSM_IGNORE,     FSM_IGNORE,     NULL                       },
+            };
 
-    if(app->create_config)
+    start_state           = FSM_INIT;
+    end_state             = CREATE_CONFIG;
+    env                   = malloc(sizeof(struct application_environment));
+    env->common.name      = "Application";
+    env->app              = app;
+    env->argc             = argc;
+    env->argv             = argv;
+    env->env_vars         = env_vars;
+    env->config_file_path = config_file_path;
+    env->app_data         = app_data;
+    result                = dc_fsm_run((struct dc_fsm_environment *)env, &start_state, &end_state, transitions, true);
+
+    if(result != 0)
     {
-        config = app->create_config();
+        // how do we signal this back to the user?
+    }
 
-        if(app->setup_config)
+    return env->result;
+}
+
+static int create_config(struct application_environment *env)
+{
+    int next_state;
+
+    if(env->app->create_config)
+    {
+        env->config = env->app->create_config();
+
+        if(env->app->setup_config)
         {
-            app->setup_config(config, argc, argv, env, config_file_path);
+            next_state = SETUP_CONFIG;
+        }
+        else
+        {
+            next_state = RUN;
         }
     }
     else
     {
-        config = NULL;
+        env->config = NULL;
+        next_state  = RUN;
     }
 
-    retVal = app->run(config, app_data);
-
-    if(app->cleanup)
-    {
-        app->cleanup(config, app_data);
-    }
-
-    if(app->destroy_config)
-    {
-        app->destroy_config(&config);
-    }
-
-    return retVal;
+    return next_state;
 }
 
+static int setup_config(struct application_environment *env)
+{
+    env->app->setup_config(env->config,
+                           env->argc,
+                           env->argv,
+                           env->env_vars,
+                           env->config_file_path);
+
+    return RUN;
+}
+
+static int run(struct application_environment *env)
+{
+    int next_state;
+
+    env->result = env->app->run(env->config,
+                           env->app_data);
+
+    if(env->result != 0)
+    {
+        next_state = ERROR;
+    }
+    else if(env->app->cleanup)
+    {
+        next_state = CLEANUP;
+    }
+    else if(env->app->destroy_config)
+    {
+        next_state = DESTROY_CONFIG;
+    }
+    else
+    {
+        next_state = FSM_EXIT;
+    }
+
+    return next_state;
+}
+
+static int cleanup(struct application_environment *env)
+{
+    int next_state;
+
+    env->app->cleanup(env->config, env->app_data);
+
+    if(env->app->destroy_config)
+    {
+        next_state = DESTROY_CONFIG;
+    }
+    else
+    {
+        next_state = FSM_EXIT;
+    }
+
+    return next_state;
+}
+
+static int destroy_config(struct application_environment *env)
+{
+    env->app->destroy_config(&env->config);
+
+    return FSM_EXIT;
+}
+
+static int error(struct application_environment *env)
+{
+    (void)env;
+
+    return FSM_EXIT;
+}
 
 void expand_path(char **expanded_path, const char *path)
 {

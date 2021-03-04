@@ -132,7 +132,7 @@ static int run(struct application_environment *env)
     int next_state;
 
     env->result = env->app->run(env->config,
-                           env->app_data);
+                                env->app_data);
 
     if(env->result != 0)
     {

@@ -1,3 +1,20 @@
+/*
+ * Copyright 2021 D'Arcy Smith + the BCIT CST Datacommunications Option students.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+
 #include "application.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,12 +56,20 @@ typedef enum
 } States;
 
 
+void dc_application_init(struct dc_application *app, run_func func)
+{
+    memset(app, 0, sizeof(struct dc_application));
+    app->run = func;
+}
+
+
 int dc_application_run(struct dc_application *app,
                        int                    argc,
                        const char            *argv[],
                        const char            *env_vars[],
                        const char            *config_file_path,
-                       void                  *app_data)
+                       void                  *app_data,
+                       bool                   verbose)
 {
     struct application_environment *env;
     int                             result;
@@ -59,12 +84,12 @@ int dc_application_run(struct dc_application *app,
                     { RUN,            CLEANUP,        (state_func)cleanup        },
                     { RUN,            DESTROY_CONFIG, (state_func)destroy_config },
                     { RUN,            FSM_EXIT,       NULL                       },
+                    { RUN,            ERROR,          (state_func)error          },
                     { CLEANUP,        DESTROY_CONFIG, (state_func)destroy_config },
                     { CLEANUP,        FSM_EXIT,       NULL                       },
                     { DESTROY_CONFIG, FSM_EXIT,       NULL                       },
                     { CREATE_CONFIG,  ERROR,          (state_func)error          },
                     { SETUP_CONFIG,   ERROR,          (state_func)error          },
-                    { RUN,            ERROR,          (state_func)error          },
                     { CLEANUP,        ERROR,          (state_func)error          },
                     { ERROR,          FSM_EXIT,       NULL                       },
                     { FSM_IGNORE,     FSM_IGNORE,     NULL                       },
@@ -80,7 +105,7 @@ int dc_application_run(struct dc_application *app,
     env->env_vars         = env_vars;
     env->config_file_path = config_file_path;
     env->app_data         = app_data;
-    result                = dc_fsm_run((struct dc_fsm_environment *)env, &start_state, &end_state, transitions, true);
+    result                = dc_fsm_run((struct dc_fsm_environment *)env, &start_state, &end_state, transitions, verbose);
 
     if(result != 0)
     {
